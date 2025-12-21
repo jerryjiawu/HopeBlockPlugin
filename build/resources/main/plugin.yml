@@ -1,0 +1,4 @@
+name: HopeBlockPlugin
+version: '1.0-SNAPSHOT'
+main: org.hopeblock.hopeBlockPlugin.HopeBlockPlugin
+api-version: '1.21'
