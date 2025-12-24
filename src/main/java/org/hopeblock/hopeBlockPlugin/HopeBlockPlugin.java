@@ -3,6 +3,9 @@ package org.hopeblock.hopeBlockPlugin;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.Sound;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
@@ -29,6 +32,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -46,9 +53,17 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private BukkitRunnable testCountdownTask;
     private boolean finalCountdownActive = false;
     private int finalCountdownSeconds = 20;
+    private BossBar donationBar;
+    private BukkitRunnable donationTask;
+    private double currentDonationAmount = 0.0;
+    private final double DONATION_GOAL = 1000.0;
+    private HttpClient httpClient;
 
     @Override
     public void onEnable() {
+        // Initialize HTTP client
+        httpClient = HttpClient.newHttpClient();
+        
         // Initialize timezone options
         initializeTimezones();
         
@@ -65,6 +80,10 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         // Start countdown task
         startCountdownTask();
         
+        // Create and start donation tracking
+        createDonationBar();
+        startDonationTask();
+        
         getLogger().info("HopeBlock Compass Plugin has been enabled!");
     }
 
@@ -78,6 +97,14 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         }
         if (testCountdownTask != null) {
             testCountdownTask.cancel();
+        }
+        if (donationTask != null) {
+            donationTask.cancel();
+        }
+        
+        // Remove donation bar from all players
+        if (donationBar != null) {
+            donationBar.removeAll();
         }
         
         getLogger().info("HopeBlock Compass Plugin has been disabled!");
@@ -202,6 +229,11 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         // Give compass to player
         ItemStack compass = createCompass();
         player.getInventory().setItem(8, compass);
+        
+        // Add player to donation bar
+        if (donationBar != null) {
+            donationBar.addPlayer(player);
+        }
         
         // Welcome message with current time
         String currentTime = getCurrentTime(player);
@@ -712,6 +744,87 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             }
         };
         testCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    private void createDonationBar() {
+        donationBar = Bukkit.createBossBar("§6§lDonation Progress: §e$0.00 CAD §6/ §e$1,000.00 CAD", BarColor.YELLOW, BarStyle.SOLID);
+        donationBar.setProgress(0.0);
+        
+        // Add all online players to the boss bar
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            donationBar.addPlayer(player);
+        }
+    }
+    
+    private void startDonationTask() {
+        donationTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                fetchDonationAmount();
+            }
+        };
+        // Update every 30 seconds (600 ticks)
+        donationTask.runTaskTimerAsynchronously(this, 0L, 600L);
+    }
+    
+    private void fetchDonationAmount() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://www.hopeblock.org/total_donations"))
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .build();
+            
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() == 200) {
+                String jsonResponse = response.body();
+                parseAndUpdateDonations(jsonResponse);
+            } else {
+                getLogger().warning("Failed to fetch donation data. Status code: " + response.statusCode());
+            }
+        } catch (Exception e) {
+            getLogger().warning("Error fetching donation data: " + e.getMessage());
+        }
+    }
+    
+    private void parseAndUpdateDonations(String jsonResponse) {
+        try {
+            // Simple JSON parsing for {"amount":"0.00"}
+            String amount = jsonResponse.replaceAll(".*\"amount\"\\s*:\\s*\"([^\"]+)\".*", "$1");
+            currentDonationAmount = Double.parseDouble(amount);
+            
+            // Update boss bar on main thread
+            Bukkit.getScheduler().runTask(this, () -> updateDonationBar());
+            
+        } catch (Exception e) {
+            getLogger().warning("Error parsing donation data: " + e.getMessage());
+        }
+    }
+    
+    private void updateDonationBar() {
+        if (donationBar == null) return;
+        
+        double progress = Math.min(currentDonationAmount / DONATION_GOAL, 1.0);
+        donationBar.setProgress(progress);
+        
+        String formattedCurrent = String.format("%.2f", currentDonationAmount);
+        String formattedGoal = String.format("%.2f", DONATION_GOAL);
+        
+        BarColor color;
+        if (progress >= 1.0) {
+            color = BarColor.GREEN;
+        } else if (progress >= 0.75) {
+            color = BarColor.BLUE;
+        } else if (progress >= 0.5) {
+            color = BarColor.YELLOW;
+        } else if (progress >= 0.25) {
+            color = BarColor.RED;
+        } else {
+            color = BarColor.RED;
+        }
+        
+        donationBar.setColor(color);
+        donationBar.setTitle("§6§lDonation Progress: §e$" + formattedCurrent + " CAD §6/ §e$" + formattedGoal + " CAD");
     }
     
     @Override
