@@ -1,0 +1,11 @@
+name: HopeBlockPlugin
+version: '1.0-SNAPSHOT'
+main: org.hopeblock.hopeBlockPlugin.HopeBlockPlugin
+api-version: '1.21'
+author: HopeBlock Team
+description: A comprehensive compass plugin with timezone management and minigames teleportation
+
+commands:
+  countdown:
+    description: New Year countdown control
+    usage: /<command> [toggle|test]

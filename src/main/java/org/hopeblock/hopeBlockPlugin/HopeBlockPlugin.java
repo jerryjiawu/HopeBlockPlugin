@@ -1,14 +1,18 @@
 package org.hopeblock.hopeBlockPlugin;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
+import org.bukkit.FireworkEffect;
 import org.bukkit.Material;
 import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -19,6 +23,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.ItemFlag;
+import org.bukkit.inventory.meta.FireworkMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.Location;
@@ -30,6 +35,9 @@ import java.time.ZonedDateTime;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
@@ -38,6 +46,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 
 public final class HopeBlockPlugin extends JavaPlugin implements Listener {
 
@@ -58,11 +68,13 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private double currentDonationAmount = 0.0;
     private final double DONATION_GOAL = 1000.0;
     private HttpClient httpClient;
+    private Gson gson;
 
     @Override
     public void onEnable() {
-        // Initialize HTTP client
+        // Initialize HTTP client and Gson
         httpClient = HttpClient.newHttpClient();
+        gson = new Gson();
         
         // Initialize timezone options
         initializeTimezones();
@@ -687,6 +699,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                         playersWhoSawNewYear.add(player.getUniqueId().toString());
                     }
                     
+                    // Launch fireworks for New Year celebration
+                    startFireworkProcedure();
+                    
                     // Stop the final countdown
                     finalCountdownActive = false;
                     finalCountdownSeconds = 20;
@@ -735,6 +750,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                         player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
                         player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
                     }
+                    
+                    // Launch fireworks for test celebration
+                    startFireworkProcedure();
                     
                     // Stop the test countdown
                     testCountdownActive = false;
@@ -827,6 +845,324 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         donationBar.setTitle("§6§lDonation Progress: §e$" + formattedCurrent + " CAD §6/ §e$" + formattedGoal + " CAD");
     }
     
+    private void startFireworkProcedure() {
+        getLogger().info("Starting firework procedure...");
+        
+        // Place obsidian block to block beacon beam
+        World world = Bukkit.getWorld("world");
+        if (world == null) {
+            getLogger().warning("World not found for firework procedure!");
+            return;
+        }
+        
+        Location obsidianLocation = new Location(world, 620, 65, -38);
+        obsidianLocation.getBlock().setType(Material.OBSIDIAN);
+        getLogger().info("Placed obsidian block at " + obsidianLocation);
+        
+        // Fetch firework orders asynchronously
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                fetchAndLaunchFireworks(obsidianLocation);
+            }
+        }.runTaskAsynchronously(this);
+    }
+    
+    private void fetchAndLaunchFireworks(Location obsidianLocation) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://www.hopeblock.org/admin/orders?api_key=a22bfa003a7e375c04e3c9f2e5482047105b34d6abd22885f2dc7168f239a9f4"))
+                    .timeout(java.time.Duration.ofSeconds(15))
+                    .build();
+            
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() == 200) {
+                String jsonResponse = response.body();
+                parseAndLaunchFireworks(jsonResponse, obsidianLocation);
+            } else {
+                getLogger().warning("Failed to fetch firework orders. Status code: " + response.statusCode());
+                // Remove obsidian block on failure
+                Bukkit.getScheduler().runTask(this, () -> obsidianLocation.getBlock().setType(Material.AIR));
+            }
+        } catch (Exception e) {
+            getLogger().warning("Error fetching firework orders: " + e.getMessage());
+            // Remove obsidian block on failure
+            Bukkit.getScheduler().runTask(this, () -> obsidianLocation.getBlock().setType(Material.AIR));
+        }
+    }
+    
+    private void parseAndLaunchFireworks(String jsonResponse, Location obsidianLocation) {
+        try {
+            List<FireworkOrder> orders = parseFireworkOrders(jsonResponse);
+            getLogger().info("Found " + orders.size() + " firework orders");
+            
+            // Launch fireworks on main thread
+            Bukkit.getScheduler().runTask(this, () -> launchOrderedFireworks(orders, obsidianLocation));
+            
+        } catch (Exception e) {
+            getLogger().warning("Error parsing firework orders: " + e.getMessage());
+            // Remove obsidian block on failure
+            Bukkit.getScheduler().runTask(this, () -> obsidianLocation.getBlock().setType(Material.AIR));
+        }
+    }
+    
+    private List<FireworkOrder> parseFireworkOrders(String jsonResponse) {
+        List<FireworkOrder> orders = new ArrayList<>();
+        
+        try {
+            getLogger().info("Parsing JSON response with Gson...");
+            
+            // Parse the JSON response using Gson
+            FireworkResponse response = gson.fromJson(jsonResponse, FireworkResponse.class);
+            
+            if (response == null || response.orders == null) {
+                getLogger().warning("Invalid response structure");
+                return orders;
+            }
+            
+            getLogger().info("Found " + response.orders.size() + " orders in response");
+            
+            for (FireworkOrderJson orderJson : response.orders) {
+                List<FireworkCharge> charges = new ArrayList<>();
+                
+                if (orderJson.charges != null) {
+                    for (FireworkChargeJson chargeJson : orderJson.charges) {
+                        String colorHex = chargeJson.color != null ? chargeJson.color.hex : "#FFFFFF";
+                        String typeName = chargeJson.type != null ? chargeJson.type.name : "Normal";
+                        String effectName = chargeJson.effects != null ? chargeJson.effects.name : "Normal";
+                        
+                        getLogger().info("Parsed charge: " + typeName + " - " + colorHex + " (" + effectName + ")");
+                        charges.add(new FireworkCharge(colorHex, typeName, effectName));
+                    }
+                }
+                
+                FireworkOrder order = new FireworkOrder(orderJson.quantity, charges);
+                orders.add(order);
+                getLogger().info("Successfully parsed order with " + order.quantity + " fireworks and " + order.charges.size() + " charges");
+            }
+            
+            getLogger().info("Total orders parsed: " + orders.size());
+            return orders;
+            
+        } catch (JsonSyntaxException e) {
+            getLogger().warning("JSON parsing error: " + e.getMessage());
+            e.printStackTrace();
+            return orders;
+        } catch (Exception e) {
+            getLogger().warning("Error parsing orders: " + e.getMessage());
+            e.printStackTrace();
+            return orders;
+        }
+    }
+    
+    private void launchOrderedFireworks(List<FireworkOrder> orders, Location obsidianLocation) {
+        int totalFireworks = orders.stream().mapToInt(order -> order.quantity).sum();
+        getLogger().info("Launching " + totalFireworks + " fireworks total across " + orders.size() + " orders");
+        
+        new BukkitRunnable() {
+            private int currentOrderIndex = 0;
+            private int remainingInCurrentOrder = 0;
+            private int totalLaunched = 0;
+            
+            @Override
+            public void run() {
+                // Check if we need to start a new order
+                if (remainingInCurrentOrder <= 0) {
+                    if (currentOrderIndex >= orders.size()) {
+                        // All orders complete, remove obsidian
+                        obsidianLocation.getBlock().setType(Material.AIR);
+                        getLogger().info("Firework procedure complete! Launched " + totalLaunched + " fireworks total.");
+                        cancel();
+                        return;
+                    }
+                    
+                    // Start next order
+                    FireworkOrder currentOrder = orders.get(currentOrderIndex);
+                    remainingInCurrentOrder = currentOrder.quantity;
+                    getLogger().info("Starting order " + (currentOrderIndex + 1) + "/" + orders.size() + " with " + remainingInCurrentOrder + " fireworks");
+                    currentOrderIndex++;
+                }
+                
+                // Launch one firework from current order
+                FireworkOrder currentOrder = orders.get(currentOrderIndex - 1);
+                launchFirework(currentOrder.charges, obsidianLocation);
+                remainingInCurrentOrder--;
+                totalLaunched++;
+                
+                getLogger().info("Launched firework " + totalLaunched + "/" + totalFireworks + " (" + remainingInCurrentOrder + " remaining in current order)");
+            }
+        }.runTaskTimer(this, 0L, ThreadLocalRandom.current().nextInt(20, 81)); // 1-4 second intervals
+    }
+    
+    private void launchFirework(List<FireworkCharge> charges, Location baseLocation) {
+        World world = baseLocation.getWorld();
+        if (world == null) return;
+        
+        // Random location within 6 block radius, 3 blocks higher
+        double x = baseLocation.getX() + ThreadLocalRandom.current().nextDouble(-6.0, 6.0);
+        double y = baseLocation.getY() + 3 + ThreadLocalRandom.current().nextDouble(0, 2.0); // 3-5 blocks higher
+        double z = baseLocation.getZ() + ThreadLocalRandom.current().nextDouble(-6.0, 6.0);
+        
+        Location launchLocation = new Location(world, x, y, z);
+        Firework firework = world.spawn(launchLocation, Firework.class);
+        FireworkMeta meta = firework.getFireworkMeta();
+        
+        // Convert charges to Bukkit FireworkEffects
+        for (FireworkCharge charge : charges) {
+            FireworkEffect effect = createFireworkEffect(charge);
+            if (effect != null) {
+                meta.addEffect(effect);
+            }
+        }
+        
+        // Random power/height (1-3)
+        meta.setPower(ThreadLocalRandom.current().nextInt(1, 4));
+        firework.setFireworkMeta(meta);
+        
+        getLogger().info("Launched firework at " + launchLocation + " with " + charges.size() + " effects");
+    }
+    
+    private FireworkEffect createFireworkEffect(FireworkCharge charge) {
+        try {
+            // Parse color from hex
+            Color color = Color.fromRGB(Integer.parseInt(charge.colorHex.substring(1), 16));
+            
+            // Determine type - mapping API names to Minecraft firework types
+            FireworkEffect.Type type;
+            String typeNameLower = charge.typeName.toLowerCase();
+            getLogger().info("Mapping firework type: '" + charge.typeName + "' -> '" + typeNameLower + "'");
+            
+            switch (typeNameLower) {
+                case "star":
+                    type = FireworkEffect.Type.STAR;  // Star-shaped explosion
+                    getLogger().info("Using STAR type");
+                    break;
+                case "creeper":
+                    type = FireworkEffect.Type.CREEPER;  // Creeper face explosion
+                    getLogger().info("Using CREEPER type");
+                    break;
+                case "fire charge":
+                    type = FireworkEffect.Type.BALL_LARGE;  // Large ball explosion
+                    getLogger().info("Using BALL_LARGE type");
+                    break;
+                case "burst":
+                    type = FireworkEffect.Type.BURST;  // Burst explosion
+                    getLogger().info("Using BURST type");
+                    break;
+                case "normal":
+                    type = FireworkEffect.Type.BALL;  // Normal small ball explosion
+                    getLogger().info("Using BALL type for Normal");
+                    break;
+                default:
+                    type = FireworkEffect.Type.BALL;  // Default fallback
+                    getLogger().warning("Unknown firework type '" + charge.typeName + "', using BALL as fallback");
+                    break;
+            }
+            
+            FireworkEffect.Builder builder = FireworkEffect.builder()
+                    .with(type)
+                    .withColor(color)
+                    .withFade(Color.WHITE); // Add fade color for better visibility
+            
+            // Add effects based on effect name
+            String effectLower = charge.effectName.toLowerCase();
+            if (effectLower.contains("trail") && effectLower.contains("twinkle")) {
+                builder.withTrail();
+                builder.withFlicker();
+                getLogger().info("Added trail + twinkle effects to firework");
+            } else if (effectLower.contains("trail")) {
+                builder.withTrail();
+                getLogger().info("Added trail effect to firework");
+            } else if (effectLower.contains("twinkle")) {
+                builder.withFlicker();
+                getLogger().info("Added twinkle effect to firework");
+            }
+            
+            FireworkEffect effect = builder.build();
+            getLogger().info("Created firework effect: " + type + " with color " + charge.colorHex + " and effect " + charge.effectName);
+            return effect;
+        } catch (Exception e) {
+            getLogger().warning("Error creating firework effect for " + charge.colorHex + ": " + e.getMessage());
+            // Return a basic effect as fallback
+            return FireworkEffect.builder()
+                    .with(FireworkEffect.Type.BALL)
+                    .withColor(Color.WHITE)
+                    .build();
+        }
+    }
+    
+    // JSON response classes for Gson
+    private static class FireworkResponse {
+        List<FireworkOrderJson> orders;
+        StatsJson stats;
+        int total;
+    }
+    
+    private static class FireworkOrderJson {
+        int charge_count;
+        List<FireworkChargeJson> charges;
+        String created_at;
+        String donated_amount;
+        String donation_status;
+        String donor_name;
+        String order_id;
+        int quantity;
+        String total_price;
+    }
+    
+    private static class FireworkChargeJson {
+        ColorJson color;
+        EffectJson effects;
+        TypeJson type;
+    }
+    
+    private static class ColorJson {
+        String hex;
+        String name;
+    }
+    
+    private static class EffectJson {
+        int id;
+        String name;
+    }
+    
+    private static class TypeJson {
+        int id;
+        String name;
+    }
+    
+    private static class StatsJson {
+        String avg_order_value;
+        int completed_donations;
+        String total_donated;
+        int total_fireworks_ordered;
+        int total_orders;
+    }
+    
+    // Helper classes for firework data
+    private static class FireworkOrder {
+        final int quantity;
+        final List<FireworkCharge> charges;
+        
+        FireworkOrder(int quantity, List<FireworkCharge> charges) {
+            this.quantity = quantity;
+            this.charges = charges;
+        }
+    }
+    
+    private static class FireworkCharge {
+        final String colorHex;
+        final String typeName;
+        final String effectName;
+        
+        FireworkCharge(String colorHex, String typeName, String effectName) {
+            this.colorHex = colorHex;
+            this.typeName = typeName;
+            this.effectName = effectName;
+        }
+    }
+    
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("countdown")) {
@@ -840,6 +1176,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             if (args.length == 0) {
                 player.sendMessage("§e/countdown toggle - Toggle countdown display");
                 player.sendMessage("§e/countdown test - Test New Year celebration");
+                player.sendMessage("§e/countdown fireworks - Launch donation fireworks");
                 return true;
             }
             
@@ -871,6 +1208,17 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                 
                 player.sendMessage("§a§lStarting test countdown from 20 seconds!");
                 startTestCountdown();
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("fireworks")) {
+                if (!player.hasPermission("hopeblock.admin")) {
+                    player.sendMessage("§c§lYou don't have permission to use this command!");
+                    return true;
+                }
+                
+                player.sendMessage("§a§lStarting firework procedure...");
+                startFireworkProcedure();
                 return true;
             }
             
