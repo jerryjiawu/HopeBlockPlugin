@@ -16,6 +16,7 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.10-R0.1-SNAPSHOT")
+    
 }
 
 tasks {
@@ -24,6 +25,17 @@ tasks {
         // This is the only required configuration besides applying the plugin.
         // Your plugin's jar (or shadowJar if present) will be used automatically.
         minecraftVersion("1.21")
+    }
+}
+
+task deployToServer(type: Copy) {
+    dependsOn build
+    from 'build/libs/'
+    into '../plugins/'
+    include '*.jar'
+    
+    doLast {
+        println "Plugin deployed to server plugins directory!"
     }
 }
 
