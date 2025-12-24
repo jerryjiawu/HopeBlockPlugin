@@ -2,6 +2,9 @@ package org.hopeblock.hopeBlockPlugin;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -17,9 +20,11 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.scheduler.BukkitRunnable;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.io.File;
@@ -33,6 +38,14 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private Map<String, String> timezoneOptions = new LinkedHashMap<>();
     private File timezoneFile;
     private FileConfiguration timezoneConfig;
+    private boolean countdownActive = true;
+    private BukkitRunnable countdownTask;
+    private Set<String> playersWhoSawNewYear = new HashSet<>();
+    private boolean testCountdownActive = false;
+    private int testCountdownSeconds = 20;
+    private BukkitRunnable testCountdownTask;
+    private boolean finalCountdownActive = false;
+    private int finalCountdownSeconds = 20;
 
     @Override
     public void onEnable() {
@@ -49,12 +62,24 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         saveDefaultConfig();
         setDefaultConfig();
         
+        // Start countdown task
+        startCountdownTask();
+        
         getLogger().info("HopeBlock Compass Plugin has been enabled!");
     }
 
     @Override
     public void onDisable() {
         saveTimezoneData();
+        
+        // Cancel countdown tasks
+        if (countdownTask != null) {
+            countdownTask.cancel();
+        }
+        if (testCountdownTask != null) {
+            testCountdownTask.cancel();
+        }
+        
         getLogger().info("HopeBlock Compass Plugin has been disabled!");
     }
     
@@ -510,5 +535,235 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             }
         }
         return timezoneId;
+    }
+    
+    private void startCountdownTask() {
+        countdownTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!countdownActive) {
+                    return;
+                }
+                
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    updateCountdownDisplay(player);
+                }
+            }
+        };
+        countdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    private void updateCountdownDisplay(Player player) {
+        String playerId = player.getUniqueId().toString();
+        
+        // Skip if player already saw New Year celebration
+        if (playersWhoSawNewYear.contains(playerId)) {
+            return;
+        }
+        
+        // If test countdown is active, show test countdown instead
+        if (testCountdownActive) {
+            updateTestCountdownDisplay(player);
+            return;
+        }
+        
+        String timezone = getPlayerTimezone(player);
+        ZoneId zoneId = ZoneId.of(timezone);
+        ZonedDateTime now = ZonedDateTime.now(zoneId);
+        
+        // Calculate time until New Year (January 1st of next year)
+        ZonedDateTime newYear = ZonedDateTime.of(now.getYear() + 1, 1, 1, 0, 0, 0, 0, zoneId);
+        Duration duration = Duration.between(now, newYear);
+        
+        if (duration.isNegative() || duration.isZero()) {
+            // New Year reached!
+            player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + now.format(DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss z")), 10, 70, 20);
+            player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+            player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+            
+            // Mark player as having seen New Year celebration
+            playersWhoSawNewYear.add(playerId);
+            return;
+        }
+        
+        // Check if we're within 20 seconds of New Year
+        long totalSeconds = duration.getSeconds();
+        if (totalSeconds <= 20 && !finalCountdownActive) {
+            // Start the final 20-second countdown
+            startFinalCountdown();
+            return;
+        }
+        
+        if (finalCountdownActive) {
+            updateFinalCountdownDisplay(player);
+            return;
+        }
+        
+        // Format regular countdown
+        long days = duration.toDays();
+        long hours = duration.toHours() % 24;
+        long minutes = duration.toMinutes() % 60;
+        long seconds = duration.getSeconds() % 60;
+        
+        String countdown = String.format("§c⏰ %dd %02dh %02dm %02ds", days, hours, minutes, seconds);
+        String currentTime = "§e🕒 " + now.format(DateTimeFormatter.ofPattern("HH:mm:ss z"));
+        
+        // Use action bar for always-visible display
+        player.sendActionBar(countdown + " §7| " + currentTime);
+    }
+    
+    private void updateFinalCountdownDisplay(Player player) {
+        if (finalCountdownSeconds <= 0) {
+            return;
+        }
+        
+        String currentTime = "§e" + getCurrentTime(player);
+        
+        // Display large countdown in center of screen
+        String countdownText = "§c§l" + finalCountdownSeconds;
+        player.sendTitle(countdownText, currentTime, 0, 25, 5);
+    }
+    
+    private void startFinalCountdown() {
+        finalCountdownActive = true;
+        finalCountdownSeconds = 20;
+        
+        BukkitRunnable finalCountdownTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!finalCountdownActive) {
+                    cancel();
+                    return;
+                }
+                
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    updateFinalCountdownDisplay(player);
+                }
+                
+                // Decrement countdown
+                finalCountdownSeconds--;
+                
+                // Check if countdown reached 0
+                if (finalCountdownSeconds <= 0) {
+                    // Show Happy New Year to all players
+                    for (Player player : Bukkit.getOnlinePlayers()) {
+                        player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + getCurrentTime(player), 10, 70, 20);
+                        player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+                        player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                        
+                        // Mark all players as having seen New Year celebration
+                        playersWhoSawNewYear.add(player.getUniqueId().toString());
+                    }
+                    
+                    // Stop the final countdown
+                    finalCountdownActive = false;
+                    finalCountdownSeconds = 20;
+                    cancel();
+                }
+            }
+        };
+        finalCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    private void updateTestCountdownDisplay(Player player) {
+        if (testCountdownSeconds <= 0) {
+            return;
+        }
+        
+        String currentTime = "§e" + getCurrentTime(player);
+        
+        // Display large countdown in center of screen
+        String countdownText = "§c§l" + testCountdownSeconds;
+        player.sendTitle(countdownText, currentTime, 0, 25, 5);
+    }
+    
+    private void startTestCountdown() {
+        testCountdownActive = true;
+        testCountdownSeconds = 20;
+        
+        testCountdownTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!testCountdownActive) {
+                    return;
+                }
+                
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    updateTestCountdownDisplay(player);
+                }
+                
+                // Decrement countdown
+                testCountdownSeconds--;
+                
+                // Check if countdown reached 0
+                if (testCountdownSeconds <= 0) {
+                    // Show Happy New Year to all players
+                    for (Player player : Bukkit.getOnlinePlayers()) {
+                        player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + getCurrentTime(player), 10, 70, 20);
+                        player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+                        player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                    }
+                    
+                    // Stop the test countdown
+                    testCountdownActive = false;
+                    testCountdownSeconds = 20;
+                    cancel();
+                }
+            }
+        };
+        testCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (command.getName().equalsIgnoreCase("countdown")) {
+            if (!(sender instanceof Player)) {
+                sender.sendMessage("§cThis command can only be used by players!");
+                return true;
+            }
+            
+            Player player = (Player) sender;
+            
+            if (args.length == 0) {
+                player.sendMessage("§e/countdown toggle - Toggle countdown display");
+                player.sendMessage("§e/countdown test - Test New Year celebration");
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("toggle")) {
+                countdownActive = !countdownActive;
+                if (countdownActive) {
+                    player.sendMessage("§a§lCountdown display activated!");
+                    // Show countdown for all players
+                    for (Player p : Bukkit.getOnlinePlayers()) {
+                        updateCountdownDisplay(p);
+                    }
+                } else {
+                    player.sendMessage("§c§lCountdown display deactivated!");
+                    // Clear action bars for all players
+                    for (Player p : Bukkit.getOnlinePlayers()) {
+                        p.sendActionBar("");
+                    }
+                    // Reset New Year tracking
+                    playersWhoSawNewYear.clear();
+                }
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("test")) {
+                if (testCountdownActive) {
+                    player.sendMessage("§c§lTest countdown already running!");
+                    return true;
+                }
+                
+                player.sendMessage("§a§lStarting test countdown from 20 seconds!");
+                startTestCountdown();
+                return true;
+            }
+            
+            return true;
+        }
+        
+        return false;
     }
 }
