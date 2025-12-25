@@ -720,6 +720,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             public void run() {
                 for (Player player : Bukkit.getOnlinePlayers()) {
                     ensurePlayerHasCompass(player);
+                    limitBookAndQuill(player);
                 }
             }
         };
@@ -740,6 +741,49 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                 getLogger().info("Gave Hope Compass to " + player.getName() + " (slot was empty)");
             } else {
                 getLogger().info("Replaced item in slot 8 with Hope Compass for " + player.getName());
+            }
+        }
+    }
+    
+    private void limitBookAndQuill(Player player) {
+        int bookCount = 0;
+        ItemStack firstBook = null;
+        int firstBookSlot = -1;
+        
+        // Count all book and quill items in inventory
+        for (int i = 0; i < player.getInventory().getSize(); i++) {
+            ItemStack item = player.getInventory().getItem(i);
+            if (item != null && item.getType() == Material.WRITABLE_BOOK) {
+                bookCount++;
+                if (firstBook == null) {
+                    firstBook = item;
+                    firstBookSlot = i;
+                }
+            }
+        }
+        
+        // If player has more than one book and quill, remove extras
+        if (bookCount > 1) {
+            // Clear all book and quill items
+            for (int i = 0; i < player.getInventory().getSize(); i++) {
+                ItemStack item = player.getInventory().getItem(i);
+                if (item != null && item.getType() == Material.WRITABLE_BOOK) {
+                    player.getInventory().setItem(i, null);
+                }
+            }
+            
+            // Give back only one book and quill
+            if (firstBook != null) {
+                ItemStack singleBook = new ItemStack(Material.WRITABLE_BOOK, 1);
+                // Try to put it back in the original slot, otherwise find an empty slot
+                if (player.getInventory().getItem(firstBookSlot) == null) {
+                    player.getInventory().setItem(firstBookSlot, singleBook);
+                } else {
+                    player.getInventory().addItem(singleBook);
+                }
+                
+                player.sendMessage("§c§lYou can only hold one Book and Quill at a time!");
+                getLogger().info("Limited " + player.getName() + " to one Book and Quill (had " + bookCount + ")");
             }
         }
     }
