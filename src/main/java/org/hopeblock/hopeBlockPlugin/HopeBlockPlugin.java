@@ -326,9 +326,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     player.closeInventory();
                     teleportToMinigame(player, "pvp");
                     break;
-                case GRASS_BLOCK:
+                case IRON_SHOVEL:
                     player.closeInventory();
-                    teleportToMinigame(player, "survival");
+                    player.performCommand("function kcf:spleef/join");
                     break;
                 case ARROW:
                     openMainMenu(player);
@@ -362,7 +362,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             "§7Teleport to different minigames!",
             "§7• Bedwars",
             "§7• PvP Arena", 
-            "§7• Survival",
+            "§7• Spleef",
             "",
             "§7Click to view minigames!"
         ));
@@ -471,17 +471,19 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         ));
         pvp.setItemMeta(pvpMeta);
         
-        // Survival
-        ItemStack survival = new ItemStack(Material.GRASS_BLOCK);
-        ItemMeta survivalMeta = survival.getItemMeta();
-        survivalMeta.setDisplayName("§2§lSurvival");
-        survivalMeta.setLore(Arrays.asList(
-            "§7Build, mine, and survive",
-            "§7in the wilderness!",
+        // Spleef
+        ItemStack spleef = new ItemStack(Material.IRON_SHOVEL);
+        ItemMeta spleefMeta = spleef.getItemMeta();
+        spleefMeta.setDisplayName("§6§lSpleef");
+        spleefMeta.setLore(Arrays.asList(
+            "§7Dig blocks beneath other players",
+            "§7to make them fall to win!",
             "",
             "§7Click to join!"
         ));
-        survival.setItemMeta(survivalMeta);
+        spleefMeta.addEnchant(Enchantment.EFFICIENCY, 3, true);
+        spleefMeta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+        spleef.setItemMeta(spleefMeta);
         
         // Back button
         ItemStack backItem = new ItemStack(Material.ARROW);
@@ -491,7 +493,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         
         inv.setItem(11, bedwars);
         inv.setItem(13, pvp);
-        inv.setItem(15, survival);
+        inv.setItem(15, spleef);
         inv.setItem(18, backItem);
         
         fillEmptySlots(inv);
@@ -937,7 +939,10 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     }
                 }
                 
-                FireworkOrder order = new FireworkOrder(orderJson.quantity, charges);
+                String donorName = orderJson.donor_name != null ? orderJson.donor_name : "Anonymous";
+                String donorComment = orderJson.donor_comment != null ? orderJson.donor_comment : "";
+                
+                FireworkOrder order = new FireworkOrder(orderJson.quantity, charges, donorName, donorComment);
                 orders.add(order);
                 getLogger().info("Successfully parsed order with " + order.quantity + " fireworks and " + order.charges.size() + " charges");
             }
@@ -981,6 +986,17 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     FireworkOrder currentOrder = orders.get(currentOrderIndex);
                     remainingInCurrentOrder = currentOrder.quantity;
                     getLogger().info("Starting order " + (currentOrderIndex + 1) + "/" + orders.size() + " with " + remainingInCurrentOrder + " fireworks");
+                    
+                    // Display donor information to all players
+                    String donorMessage = "§6§lFirework Show Sponsored by: §e" + currentOrder.donorName;
+                    if (!currentOrder.donorComment.isEmpty()) {
+                        donorMessage += "\n§7§l\"§f" + currentOrder.donorComment + "§7§l\"";
+                    }
+                    
+                    for (Player player : Bukkit.getOnlinePlayers()) {
+                        player.sendMessage(donorMessage);
+                    }
+                    
                     currentOrderIndex++;
                 }
                 
@@ -1106,6 +1122,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         String donated_amount;
         String donation_status;
         String donor_name;
+        String donor_comment;
         String order_id;
         int quantity;
         String total_price;
@@ -1144,10 +1161,14 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private static class FireworkOrder {
         final int quantity;
         final List<FireworkCharge> charges;
+        final String donorName;
+        final String donorComment;
         
-        FireworkOrder(int quantity, List<FireworkCharge> charges) {
+        FireworkOrder(int quantity, List<FireworkCharge> charges, String donorName, String donorComment) {
             this.quantity = quantity;
             this.charges = charges;
+            this.donorName = donorName != null ? donorName : "Anonymous";
+            this.donorComment = donorComment != null ? donorComment : "";
         }
     }
     
