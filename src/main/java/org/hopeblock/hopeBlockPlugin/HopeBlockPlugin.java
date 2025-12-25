@@ -1039,9 +1039,16 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             private int currentOrderIndex = 0;
             private int remainingInCurrentOrder = 0;
             private int totalLaunched = 0;
+            private int ticksUntilNext = 0;
             
             @Override
             public void run() {
+                // Check if we need to wait for the next firework
+                if (ticksUntilNext > 0) {
+                    ticksUntilNext--;
+                    return;
+                }
+                
                 // Check if we need to start a new order
                 if (remainingInCurrentOrder <= 0) {
                     if (currentOrderIndex >= orders.size()) {
@@ -1077,8 +1084,11 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                 totalLaunched++;
                 
                 getLogger().info("Launched firework " + totalLaunched + "/" + totalFireworks + " (" + remainingInCurrentOrder + " remaining in current order)");
+                
+                // Set random delay for next firework (0 to 1 seconds = 0-20 ticks)
+                ticksUntilNext = ThreadLocalRandom.current().nextInt(0, 20);
             }
-        }.runTaskTimer(this, 0L, ThreadLocalRandom.current().nextInt(0, 21)); // 0-1 second intervals (rapid placement)
+        }.runTaskTimer(this, 0L, 1L); // Run every tick
     }
     
     private void launchFirework(List<FireworkCharge> charges, Location baseLocation) {
