@@ -97,6 +97,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         // Start compass check task
         startCompassCheckTask();
         
+        // Start firework distribution task
+        startFireworkTask();
+        
         // Create and start donation tracking
         createDonationBar();
         startDonationTask();
@@ -268,14 +271,82 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         ItemStack item = event.getItem();
         
-        if (item == null || !isHopeCompass(item)) {
+        if (item == null) {
             return;
         }
         
-        if (event.getAction() == Action.RIGHT_CLICK_AIR || event.getAction() == Action.RIGHT_CLICK_BLOCK) {
-            event.setCancelled(true);
-            openMainMenu(player);
+        // Handle Hope Compass interaction
+        if (isHopeCompass(item)) {
+            if (event.getAction() == Action.RIGHT_CLICK_AIR || event.getAction() == Action.RIGHT_CLICK_BLOCK) {
+                event.setCancelled(true);
+                openMainMenu(player);
+            }
+            return;
         }
+        
+        // Handle empty firework interaction - manually launch for adventure mode
+        if (isEmptyFirework(item)) {
+            if (event.getAction() == Action.RIGHT_CLICK_AIR || event.getAction() == Action.RIGHT_CLICK_BLOCK) {
+                // For adventure mode players, manually launch the firework
+                if (player.getGameMode() == org.bukkit.GameMode.ADVENTURE) {
+                    event.setCancelled(true); // Cancel the event to prevent normal handling
+                    manuallyLaunchFirework(player, item, event.getClickedBlock());
+                    getLogger().info(player.getName() + " manually launched a firework in Adventure mode");
+                } else {
+                    // For other game modes, allow normal firework usage
+                    event.setCancelled(false);
+                    event.setUseItemInHand(org.bukkit.event.Event.Result.ALLOW);
+                    getLogger().info(player.getName() + " launched a firework in game mode: " + player.getGameMode());
+                }
+            }
+            return;
+        }
+    }
+    
+    private void manuallyLaunchFirework(Player player, ItemStack fireworkItem, org.bukkit.block.Block clickedBlock) {
+        // Get the firework meta for launching
+        FireworkMeta meta = (FireworkMeta) fireworkItem.getItemMeta();
+        
+        // Determine launch location based on clicked block
+        Location launchLocation;
+        if (clickedBlock != null) {
+            // Launch from the top of the clicked block
+            launchLocation = clickedBlock.getLocation().add(0.5, 1.0, 0.5);
+        } else {
+            // Launch from above player if no block was clicked (right-click air)
+            launchLocation = player.getLocation().add(0, 1.5, 0);
+        }
+        
+        // Spawn firework entity at determined location
+        Firework firework = player.getWorld().spawn(launchLocation, Firework.class);
+        firework.setFireworkMeta(meta);
+        
+        // Play launch sound
+        player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1.0f, 1.0f);
+        
+        // Consume the firework item
+        ItemStack handItem = player.getInventory().getItemInMainHand();
+        if (handItem.isSimilar(fireworkItem)) {
+            // Remove from main hand
+            if (handItem.getAmount() > 1) {
+                handItem.setAmount(handItem.getAmount() - 1);
+            } else {
+                player.getInventory().setItemInMainHand(null);
+            }
+        } else {
+            // Check off-hand
+            ItemStack offHandItem = player.getInventory().getItemInOffHand();
+            if (offHandItem.isSimilar(fireworkItem)) {
+                if (offHandItem.getAmount() > 1) {
+                    offHandItem.setAmount(offHandItem.getAmount() - 1);
+                } else {
+                    player.getInventory().setItemInOffHand(null);
+                }
+            }
+        }
+        
+        // Update inventory to show changes
+        player.updateInventory();
     }
     
     @EventHandler
@@ -671,6 +742,96 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                 getLogger().info("Replaced item in slot 8 with Hope Compass for " + player.getName());
             }
         }
+    }
+    
+    private void startFireworkTask() {
+        BukkitRunnable fireworkTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    ensurePlayerHasFirework(player);
+                }
+            }
+        };
+        fireworkTask.runTaskTimer(this, 0L, 100L); // Run every 5 seconds
+    }
+    
+    private void ensurePlayerHasFirework(Player player) {
+        // Count total fireworks in inventory
+        int fireworkCount = countFireworksInInventory(player);
+        
+        // If player has less than 8 fireworks, give them one more
+        if (fireworkCount < 8) {
+            ItemStack firework = createEmptyFirework();
+            
+            // Try to place in slot 0 first
+            ItemStack slot0Item = player.getInventory().getItem(0);
+            if (slot0Item == null || slot0Item.getType() == Material.AIR) {
+                player.getInventory().setItem(0, firework);
+            } else {
+                // Slot 0 is occupied, try to add to inventory normally
+                player.getInventory().addItem(firework);
+            }
+        }
+        
+        // Ensure slot 0 always has a firework if player has any fireworks
+        ItemStack slot0Item = player.getInventory().getItem(0);
+        if ((slot0Item == null || slot0Item.getType() != Material.FIREWORK_ROCKET) && fireworkCount > 0) {
+            // Find a firework in inventory and move it to slot 0
+            for (int i = 1; i < player.getInventory().getSize(); i++) {
+                ItemStack item = player.getInventory().getItem(i);
+                if (item != null && item.getType() == Material.FIREWORK_ROCKET && isEmptyFirework(item)) {
+                    // Move this firework to slot 0
+                    ItemStack currentSlot0 = player.getInventory().getItem(0);
+                    player.getInventory().setItem(0, item);
+                    if (currentSlot0 != null && currentSlot0.getType() != Material.AIR) {
+                        player.getInventory().setItem(i, currentSlot0);
+                    } else {
+                        player.getInventory().setItem(i, null);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    private ItemStack createEmptyFirework() {
+        ItemStack firework = new ItemStack(Material.FIREWORK_ROCKET);
+        FireworkMeta meta = (FireworkMeta) firework.getItemMeta();
+        
+        meta.setDisplayName("§c§lFirework Rocket");
+        meta.setLore(Arrays.asList(
+            "§7Right-click to launch!",
+            "§7Empty firework - no effects"
+        ));
+        
+        // Set power to 1 for basic flight
+        meta.setPower(1);
+        
+        // Add custom model data to identify as our firework
+        meta.setCustomModelData(54321);
+        
+        firework.setItemMeta(meta);
+        return firework;
+    }
+    
+    private boolean isEmptyFirework(ItemStack item) {
+        if (item == null || item.getType() != Material.FIREWORK_ROCKET) {
+            return false;
+        }
+        
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && meta.hasCustomModelData() && meta.getCustomModelData() == 54321;
+    }
+    
+    private int countFireworksInInventory(Player player) {
+        int count = 0;
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (item != null && item.getType() == Material.FIREWORK_ROCKET && isEmptyFirework(item)) {
+                count += item.getAmount();
+            }
+        }
+        return count;
     }
     
     private void updateCountdownDisplay(Player player) {
