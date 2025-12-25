@@ -18,6 +18,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.inventory.Inventory;
@@ -92,6 +93,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         
         // Start countdown task
         startCountdownTask();
+        
+        // Start compass check task
+        startCompassCheckTask();
         
         // Create and start donation tracking
         createDonationBar();
@@ -275,10 +279,45 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     }
     
     @EventHandler
+    public void onPlayerDropItem(PlayerDropItemEvent event) {
+        ItemStack droppedItem = event.getItemDrop().getItemStack();
+        
+        if (isHopeCompass(droppedItem)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage("§c§lYou cannot drop the Hope Compass!");
+        }
+    }
+    
+    @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         Player player = (Player) event.getWhoClicked();
         String title = event.getView().getTitle();
         ItemStack clickedItem = event.getCurrentItem();
+        
+        // Prevent moving Hope Compass from slot 8 in player inventory
+        if (event.getClickedInventory() != null && 
+            event.getClickedInventory().equals(player.getInventory()) && 
+            event.getSlot() == 8 && 
+            clickedItem != null && 
+            isHopeCompass(clickedItem)) {
+            event.setCancelled(true);
+            player.sendMessage("§c§lYou cannot move the Hope Compass!");
+            return;
+        }
+        
+        // Prevent placing items in slot 8 if it's not empty
+        if (event.getClickedInventory() != null && 
+            event.getClickedInventory().equals(player.getInventory()) && 
+            event.getSlot() == 8 && 
+            event.getCursor() != null && 
+            event.getCursor().getType() != Material.AIR) {
+            ItemStack currentItem = player.getInventory().getItem(8);
+            if (currentItem != null && isHopeCompass(currentItem)) {
+                event.setCancelled(true);
+                player.sendMessage("§c§lSlot 8 is reserved for the Hope Compass!");
+                return;
+            }
+        }
         
         if (clickedItem == null || clickedItem.getType() == Material.AIR) {
             return;
@@ -333,7 +372,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     break;
                 case IRON_SHOVEL:
                     player.closeInventory();
-                    player.performCommand("function kcf:spleef/join");
+                    player.performCommand("trigger joinspleef");
                     break;
                 case ARROW:
                     openMainMenu(player);
@@ -602,6 +641,36 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             }
         };
         countdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    private void startCompassCheckTask() {
+        BukkitRunnable compassTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    ensurePlayerHasCompass(player);
+                }
+            }
+        };
+        compassTask.runTaskTimer(this, 0L, 100L); // Run every 5 seconds
+    }
+    
+    private void ensurePlayerHasCompass(Player player) {
+        ItemStack slotItem = player.getInventory().getItem(8);
+        
+        // Check if slot 8 has the Hope Compass
+        if (slotItem == null || !isHopeCompass(slotItem)) {
+            // Give the player a new compass
+            ItemStack compass = createCompass();
+            player.getInventory().setItem(8, compass);
+            
+            // Only send message if the slot was completely empty or had wrong item
+            if (slotItem == null) {
+                getLogger().info("Gave Hope Compass to " + player.getName() + " (slot was empty)");
+            } else {
+                getLogger().info("Replaced item in slot 8 with Hope Compass for " + player.getName());
+            }
+        }
     }
     
     private void updateCountdownDisplay(Player player) {
