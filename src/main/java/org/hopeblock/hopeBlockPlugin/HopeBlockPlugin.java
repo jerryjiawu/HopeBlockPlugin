@@ -57,12 +57,13 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private FileConfiguration timezoneConfig;
     private boolean countdownActive = true;
     private BukkitRunnable countdownTask;
-    private Set<String> playersWhoSawNewYear = new HashSet<>();
-    private boolean testCountdownActive = false;
-    private int testCountdownSeconds = 20;
-    private BukkitRunnable testCountdownTask;
-    private boolean finalCountdownActive = false;
-    private int finalCountdownSeconds = 20;
+    private Map<String, Long> playerLastCelebrationHour = new HashMap<>();
+    private Map<String, Boolean> playerFinalCountdownActive = new HashMap<>();
+    private Map<String, Integer> playerFinalCountdownSeconds = new HashMap<>();
+    // Individual test countdown tracking
+    private Map<UUID, Boolean> playerTestCountdownActive = new HashMap<>();
+    private Map<UUID, Integer> playerTestCountdownSeconds = new HashMap<>();
+    private Map<UUID, BukkitRunnable> playerTestCountdownTasks = new HashMap<>();
     private BossBar donationBar;
     private BukkitRunnable donationTask;
     private double currentDonationAmount = 0.0;
@@ -107,9 +108,13 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         if (countdownTask != null) {
             countdownTask.cancel();
         }
-        if (testCountdownTask != null) {
-            testCountdownTask.cancel();
+        // Cancel all test countdown tasks
+        for (BukkitRunnable task : playerTestCountdownTasks.values()) {
+            if (task != null) {
+                task.cancel();
+            }
         }
+        playerTestCountdownTasks.clear();
         if (donationTask != null) {
             donationTask.cancel();
         }
@@ -602,168 +607,233 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private void updateCountdownDisplay(Player player) {
         String playerId = player.getUniqueId().toString();
         
-        // Skip if player already saw New Year celebration
-        if (playersWhoSawNewYear.contains(playerId)) {
-            return;
-        }
-        
-        // If test countdown is active, show test countdown instead
-        if (testCountdownActive) {
-            updateTestCountdownDisplay(player);
-            return;
-        }
-        
         String timezone = getPlayerTimezone(player);
         ZoneId zoneId = ZoneId.of(timezone);
         ZonedDateTime now = ZonedDateTime.now(zoneId);
         
-        // Calculate time until New Year (January 1st of next year)
-        ZonedDateTime newYear = ZonedDateTime.of(now.getYear() + 1, 1, 1, 0, 0, 0, 0, zoneId);
-        Duration duration = Duration.between(now, newYear);
+        // Calculate New Year 2026 for this timezone (January 1st, 2026)
+        ZonedDateTime newYear = now.withYear(2026).withMonth(1).withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
         
-        if (duration.isNegative() || duration.isZero()) {
-            // New Year reached!
-            player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + now.format(DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss z")), 10, 70, 20);
+        // If we're already past New Year in this timezone, check if celebration already happened
+        if (now.isAfter(newYear) || now.isEqual(newYear)) {
+            // Get current year as unique identifier for New Year celebration
+            long currentYear = now.getYear();
+            
+            // Skip if player already saw this year's New Year celebration
+            if (playerLastCelebrationHour.containsKey(playerId) && 
+                playerLastCelebrationHour.get(playerId) == currentYear) {
+                // Show "Happy New Year" message instead of countdown
+                player.sendActionBar("§a§l🎉 HAPPY NEW YEAR 2026! 🎉 §7| §e🕒 " + now.format(DateTimeFormatter.ofPattern("HH:mm:ss z")));
+                return;
+            }
+            
+            // New Year just hit! Celebrate!
+            player.sendTitle("§c§lHAPPY NEW YEAR 2026!", "§e" + now.format(DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss z")), 10, 70, 20);
             player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
             
-            // Mark player as having seen New Year celebration
-            playersWhoSawNewYear.add(playerId);
+            // Mark player as having seen this year's New Year celebration
+            playerLastCelebrationHour.put(playerId, currentYear);
+            
+            // Launch individual firework procedure for this player only
+            startIndividualFireworkProcedure(player);
             return;
         }
+        
+        // If test countdown is active for this player, show test countdown instead
+        if (playerTestCountdownActive.getOrDefault(player.getUniqueId(), false)) {
+            updateTestCountdownDisplay(player);
+            return;
+        }
+        
+        // Calculate time until New Year
+        Duration duration = Duration.between(now, newYear);
         
         // Check if we're within 20 seconds of New Year
         long totalSeconds = duration.getSeconds();
-        if (totalSeconds <= 20 && !finalCountdownActive) {
-            // Start the final 20-second countdown
-            startFinalCountdown();
+        if (totalSeconds <= 20 && !playerFinalCountdownActive.getOrDefault(playerId, false)) {
+            // Start the final 20-second countdown for this player
+            startIndividualFinalCountdown(player);
             return;
         }
         
-        if (finalCountdownActive) {
-            updateFinalCountdownDisplay(player);
+        if (playerFinalCountdownActive.getOrDefault(playerId, false)) {
+            updateIndividualFinalCountdownDisplay(player);
             return;
         }
         
-        // Format regular countdown
+        // Format New Year countdown (days, hours, minutes, seconds)
         long days = duration.toDays();
         long hours = duration.toHours() % 24;
         long minutes = duration.toMinutes() % 60;
         long seconds = duration.getSeconds() % 60;
         
-        String countdown = String.format("§c⏰ %dd %02dh %02dm %02ds", days, hours, minutes, seconds);
+        String countdown;
+        if (days > 0) {
+            countdown = String.format("§c⏰ %dd %02dh %02dm %02ds", days, hours, minutes, seconds);
+        } else if (hours > 0) {
+            countdown = String.format("§c⏰ %02dh %02dm %02ds", hours, minutes, seconds);
+        } else {
+            countdown = String.format("§c⏰ %02dm %02ds", minutes, seconds);
+        }
+        
         String currentTime = "§e🕒 " + now.format(DateTimeFormatter.ofPattern("HH:mm:ss z"));
         
         // Use action bar for always-visible display
         player.sendActionBar(countdown + " §7| " + currentTime);
     }
     
-    private void updateFinalCountdownDisplay(Player player) {
-        if (finalCountdownSeconds <= 0) {
+    private void updateIndividualFinalCountdownDisplay(Player player) {
+        String playerId = player.getUniqueId().toString();
+        int countdown = playerFinalCountdownSeconds.getOrDefault(playerId, 0);
+        
+        if (countdown <= 0) {
             return;
         }
         
         String currentTime = "§e" + getCurrentTime(player);
         
         // Display large countdown in center of screen
-        String countdownText = "§c§l" + finalCountdownSeconds;
+        String countdownText = "§c§l" + countdown;
         player.sendTitle(countdownText, currentTime, 0, 25, 5);
     }
     
-    private void startFinalCountdown() {
-        finalCountdownActive = true;
-        finalCountdownSeconds = 20;
+    private void startIndividualFinalCountdown(Player player) {
+        String playerId = player.getUniqueId().toString();
+        playerFinalCountdownActive.put(playerId, true);
+        playerFinalCountdownSeconds.put(playerId, 20);
         
-        BukkitRunnable finalCountdownTask = new BukkitRunnable() {
+        BukkitRunnable individualCountdownTask = new BukkitRunnable() {
             @Override
             public void run() {
-                if (!finalCountdownActive) {
+                if (!playerFinalCountdownActive.getOrDefault(playerId, false)) {
                     cancel();
                     return;
                 }
                 
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    updateFinalCountdownDisplay(player);
+                // Check if player is still online
+                Player onlinePlayer = Bukkit.getPlayer(UUID.fromString(playerId));
+                if (onlinePlayer == null) {
+                    playerFinalCountdownActive.remove(playerId);
+                    playerFinalCountdownSeconds.remove(playerId);
+                    cancel();
+                    return;
                 }
                 
+                updateIndividualFinalCountdownDisplay(onlinePlayer);
+                
                 // Decrement countdown
-                finalCountdownSeconds--;
+                int currentSeconds = playerFinalCountdownSeconds.getOrDefault(playerId, 0);
+                currentSeconds--;
+                playerFinalCountdownSeconds.put(playerId, currentSeconds);
                 
                 // Check if countdown reached 0
-                if (finalCountdownSeconds <= 0) {
-                    // Show Happy New Year to all players
-                    for (Player player : Bukkit.getOnlinePlayers()) {
-                        player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + getCurrentTime(player), 10, 70, 20);
-                        player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
-                        player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
-                        
-                        // Mark all players as having seen New Year celebration
-                        playersWhoSawNewYear.add(player.getUniqueId().toString());
-                    }
+                if (currentSeconds <= 0) {
+                    // Show New Year celebration to this player only
+                    String timezone = getPlayerTimezone(onlinePlayer);
+                    ZoneId zoneId = ZoneId.of(timezone);
+                    ZonedDateTime now = ZonedDateTime.now(zoneId);
+                    long currentYear = now.getYear();
                     
-                    // Launch fireworks for New Year celebration
-                    startFireworkProcedure();
+                    onlinePlayer.sendTitle("§c§lHAPPY NEW YEAR 2026!", "§e" + getCurrentTime(onlinePlayer), 10, 70, 20);
+                    onlinePlayer.playSound(onlinePlayer.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+                    onlinePlayer.playSound(onlinePlayer.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
                     
-                    // Stop the final countdown
-                    finalCountdownActive = false;
-                    finalCountdownSeconds = 20;
+                    // Mark this player as having seen this year's New Year celebration
+                    playerLastCelebrationHour.put(playerId, currentYear);
+                    
+                    // Launch individual fireworks for this player only
+                    startIndividualFireworkProcedure(onlinePlayer);
+                    
+                    // Stop this player's countdown
+                    playerFinalCountdownActive.remove(playerId);
+                    playerFinalCountdownSeconds.remove(playerId);
                     cancel();
                 }
             }
         };
-        finalCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+        individualCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
     }
     
     private void updateTestCountdownDisplay(Player player) {
-        if (testCountdownSeconds <= 0) {
+        int testSeconds = playerTestCountdownSeconds.getOrDefault(player.getUniqueId(), 0);
+        if (testSeconds <= 0) {
+            player.sendActionBar("§a§lHAPPY NEW YEAR!");
             return;
         }
         
-        String currentTime = "§e" + getCurrentTime(player);
-        
-        // Display large countdown in center of screen
-        String countdownText = "§c§l" + testCountdownSeconds;
-        player.sendTitle(countdownText, currentTime, 0, 25, 5);
+        // Format: TEST COUNTDOWN: XX
+        String countdownText = "§c§l" + testSeconds;
+        player.sendActionBar("§7§lTEST COUNTDOWN: " + countdownText);
     }
     
-    private void startTestCountdown() {
-        testCountdownActive = true;
-        testCountdownSeconds = 20;
+    private void startTestCountdown(Player triggeringPlayer) {
+        UUID playerId = triggeringPlayer.getUniqueId();
+        playerTestCountdownActive.put(playerId, true);
+        playerTestCountdownSeconds.put(playerId, 20);
         
-        testCountdownTask = new BukkitRunnable() {
+        BukkitRunnable task = new BukkitRunnable() {
             @Override
             public void run() {
-                if (!testCountdownActive) {
+                if (!playerTestCountdownActive.getOrDefault(playerId, false)) {
                     return;
                 }
                 
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    updateTestCountdownDisplay(player);
+                // Only update display for the triggering player
+                if (triggeringPlayer.isOnline()) {
+                    updateTestCountdownDisplay(triggeringPlayer);
                 }
                 
-                // Decrement countdown
-                testCountdownSeconds--;
+                // Decrement countdown for this player
+                int currentSeconds = playerTestCountdownSeconds.getOrDefault(playerId, 0) - 1;
+                playerTestCountdownSeconds.put(playerId, currentSeconds);
                 
                 // Check if countdown reached 0
-                if (testCountdownSeconds <= 0) {
-                    // Show Happy New Year to all players
-                    for (Player player : Bukkit.getOnlinePlayers()) {
-                        player.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + getCurrentTime(player), 10, 70, 20);
-                        player.playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
-                        player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                if (currentSeconds <= 0) {
+                    // Show Happy New Year only to the triggering player
+                    if (triggeringPlayer.isOnline()) {
+                        triggeringPlayer.sendTitle("§c§lHAPPY NEW YEAR!", "§e" + getCurrentTime(triggeringPlayer), 10, 70, 20);
+                        triggeringPlayer.playSound(triggeringPlayer.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+                        triggeringPlayer.playSound(triggeringPlayer.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                        
+                        // Launch individual fireworks for test celebration
+                        startIndividualFireworkProcedure(triggeringPlayer);
                     }
                     
-                    // Launch fireworks for test celebration
-                    startFireworkProcedure();
-                    
-                    // Stop the test countdown
-                    testCountdownActive = false;
-                    testCountdownSeconds = 20;
+                    // Stop the test countdown for this player
+                    playerTestCountdownActive.remove(playerId);
+                    playerTestCountdownSeconds.remove(playerId);
+                    playerTestCountdownTasks.remove(playerId);
                     cancel();
                 }
             }
         };
-        testCountdownTask.runTaskTimer(this, 0L, 20L); // Run every second
+        
+        playerTestCountdownTasks.put(playerId, task);
+        task.runTaskTimer(this, 0L, 20L); // Run every second
+    }
+    
+    private void startIndividualFireworkProcedure(Player triggeringPlayer) {
+        getLogger().info("Starting individual firework procedure for player: " + triggeringPlayer.getName());
+        
+        // Place obsidian block to block beacon beam
+        World world = Bukkit.getWorld("world");
+        if (world == null) {
+            getLogger().warning("World not found for firework procedure!");
+            return;
+        }
+        
+        Location obsidianLocation = new Location(world, 620, 65, -38);
+        obsidianLocation.getBlock().setType(Material.OBSIDIAN);
+        getLogger().info("Placed obsidian block at " + obsidianLocation);
+        
+        // Fetch firework orders asynchronously for this player
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                fetchAndLaunchFireworks(obsidianLocation);
+            }
+        }.runTaskAsynchronously(this);
     }
     
     private void createDonationBar() {
@@ -1008,7 +1078,7 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                 
                 getLogger().info("Launched firework " + totalLaunched + "/" + totalFireworks + " (" + remainingInCurrentOrder + " remaining in current order)");
             }
-        }.runTaskTimer(this, 0L, ThreadLocalRandom.current().nextInt(20, 81)); // 1-4 second intervals
+        }.runTaskTimer(this, 0L, ThreadLocalRandom.current().nextInt(0, 21)); // 0-1 second intervals (rapid placement)
     }
     
     private void launchFirework(List<FireworkCharge> charges, Location baseLocation) {
@@ -1215,20 +1285,32 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     for (Player p : Bukkit.getOnlinePlayers()) {
                         p.sendActionBar("");
                     }
-                    // Reset New Year tracking
-                    playersWhoSawNewYear.clear();
+                    // Reset hourly celebration tracking
+                    playerLastCelebrationHour.clear();
+                    playerFinalCountdownActive.clear();
+                    playerFinalCountdownSeconds.clear();
+                    
+                    // Cancel all test countdown tasks and clear test tracking
+                    for (BukkitRunnable task : playerTestCountdownTasks.values()) {
+                        if (task != null) {
+                            task.cancel();
+                        }
+                    }
+                    playerTestCountdownTasks.clear();
+                    playerTestCountdownActive.clear();
+                    playerTestCountdownSeconds.clear();
                 }
                 return true;
             }
             
             if (args[0].equalsIgnoreCase("test")) {
-                if (testCountdownActive) {
-                    player.sendMessage("§c§lTest countdown already running!");
+                if (playerTestCountdownActive.getOrDefault(player.getUniqueId(), false)) {
+                    player.sendMessage("§c§lTest countdown already running for you!");
                     return true;
                 }
                 
                 player.sendMessage("§a§lStarting test countdown from 20 seconds!");
-                startTestCountdown();
+                startTestCountdown(player);
                 return true;
             }
             
