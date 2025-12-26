@@ -12,8 +12,11 @@ import org.bukkit.boss.BossBar;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.Boat;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
+import org.bukkit.event.vehicle.VehicleExitEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -71,6 +74,9 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private final double DONATION_GOAL = 1000.0;
     private HttpClient httpClient;
     private Gson gson;
+    private Set<UUID> playersInSpleef = new HashSet<>();
+    private Set<UUID> playersInSumo = new HashSet<>();
+    private Map<UUID, org.bukkit.entity.Boat> playersInBoats = new HashMap<>();
 
     @Override
     public void onEnable() {
@@ -406,6 +412,24 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
                     break;
                 case EMERALD:
                     player.closeInventory();
+                    if (playersInSpleef.contains(player.getUniqueId())) {
+                        player.performCommand("trigger leavespleef");
+                        playersInSpleef.remove(player.getUniqueId());
+                        player.sendMessage("§c§lYou have left Spleef!");
+                    }
+                    if (playersInSumo.contains(player.getUniqueId())) {
+                        player.performCommand("trigger leavesumo");
+                        playersInSumo.remove(player.getUniqueId());
+                        player.sendMessage("§c§lYou have left Sumo Wrestling on Ice!");
+                    }
+                    if (playersInBoats.containsKey(player.getUniqueId())) {
+                        Boat boat = playersInBoats.get(player.getUniqueId());
+                        if (boat != null && !boat.isDead()) {
+                            boat.remove();
+                        }
+                        playersInBoats.remove(player.getUniqueId());
+                        player.sendMessage("§c§lYou have left Ice Boat Racing!");
+                    }
                     teleportToLobby(player);
                     break;
                 case BARRIER:
@@ -433,17 +457,23 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
             event.setCancelled(true);
             
             switch (clickedItem.getType()) {
-                case RED_BED:
+                case ICE:
                     player.closeInventory();
-                    teleportToMinigame(player, "bedwars");
+                    teleportToSumo(player);
+                    player.performCommand("trigger joinsumo");
+                    playersInSumo.add(player.getUniqueId());
+                    player.sendMessage("§a§lYou have joined Sumo Wrestling on Ice!");
                     break;
-                case IRON_SWORD:
+                case OAK_BOAT:
                     player.closeInventory();
-                    teleportToMinigame(player, "pvp");
+                    teleportToBoatRacing(player);
                     break;
                 case IRON_SHOVEL:
                     player.closeInventory();
+                    teleportToSpleef(player);
                     player.performCommand("trigger joinspleef");
+                    playersInSpleef.add(player.getUniqueId());
+                    player.sendMessage("§a§lYou have joined Spleef!");
                     break;
                 case ARROW:
                     openMainMenu(player);
@@ -475,8 +505,8 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         minigamesMeta.setDisplayName("§c§lMinigames");
         minigamesMeta.setLore(Arrays.asList(
             "§7Teleport to different minigames!",
-            "§7• Bedwars",
-            "§7• PvP Arena", 
+            "§7• Sumo Wrestling on Ice",
+            "§7• Ice Boat Racing", 
             "§7• Spleef",
             "",
             "§7Click to view minigames!"
@@ -562,29 +592,29 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
     private void openMinigamesMenu(Player player) {
         Inventory inv = Bukkit.createInventory(null, 27, "§c§lMinigames");
         
-        // Bedwars
-        ItemStack bedwars = new ItemStack(Material.RED_BED);
-        ItemMeta bedwarsMeta = bedwars.getItemMeta();
-        bedwarsMeta.setDisplayName("§c§lBedwars");
-        bedwarsMeta.setLore(Arrays.asList(
-            "§7Protect your bed and destroy",
-            "§7the enemy beds to win!",
+        // Sumo Wrestling on Ice
+        ItemStack sumo = new ItemStack(Material.ICE);
+        ItemMeta sumoMeta = sumo.getItemMeta();
+        sumoMeta.setDisplayName("§c§lSumo Wrestling on Ice");
+        sumoMeta.setLore(Arrays.asList(
+            "§7Push your opponents off the",
+            "§7icy platform to win!",
             "",
             "§7Click to join!"
         ));
-        bedwars.setItemMeta(bedwarsMeta);
+        sumo.setItemMeta(sumoMeta);
         
-        // PvP Arena
-        ItemStack pvp = new ItemStack(Material.IRON_SWORD);
-        ItemMeta pvpMeta = pvp.getItemMeta();
-        pvpMeta.setDisplayName("§4§lPvP Arena");
-        pvpMeta.setLore(Arrays.asList(
-            "§7Fight other players in",
-            "§7intense PvP battles!",
+        // Ice Boat Racing
+        ItemStack boatRacing = new ItemStack(Material.OAK_BOAT);
+        ItemMeta boatMeta = boatRacing.getItemMeta();
+        boatMeta.setDisplayName("§b§lIce Boat Racing");
+        boatMeta.setLore(Arrays.asList(
+            "§7Race with other players",
+            "§7on icy waters in boats!",
             "",
             "§7Click to join!"
         ));
-        pvp.setItemMeta(pvpMeta);
+        boatRacing.setItemMeta(boatMeta);
         
         // Spleef
         ItemStack spleef = new ItemStack(Material.IRON_SHOVEL);
@@ -606,8 +636,8 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         backMeta.setDisplayName("§7« Back");
         backItem.setItemMeta(backMeta);
         
-        inv.setItem(11, bedwars);
-        inv.setItem(13, pvp);
+        inv.setItem(11, sumo);
+        inv.setItem(13, boatRacing);
         inv.setItem(15, spleef);
         inv.setItem(18, backItem);
         
@@ -652,6 +682,91 @@ public final class HopeBlockPlugin extends JavaPlugin implements Listener {
         Location location = new Location(world, x, y, z);
         player.teleport(location);
         player.sendMessage("§a§lTeleported to " + minigame + "!");
+    }
+    
+    private void teleportToSpleef(Player player) {
+        World world = Bukkit.getWorld("world");
+        
+        if (world == null) {
+            player.sendMessage("§cSpleef world not found! Please contact an administrator.");
+            return;
+        }
+        
+        Location spleefLocation = new Location(world, 976, 64, 10);
+        player.teleport(spleefLocation);
+        player.sendMessage("§a§lTeleported to Spleef!");
+    }
+    
+    private void teleportToSumo(Player player) {
+        World world = Bukkit.getWorld("world");
+        
+        if (world == null) {
+            player.sendMessage("§cSumo world not found! Please contact an administrator.");
+            return;
+        }
+        
+        Location sumoLocation = new Location(world, 975, 63, -13);
+        player.teleport(sumoLocation);
+        player.sendMessage("§a§lTeleported to Sumo Wrestling on Ice!");
+    }
+    
+    private void teleportToBoatRacing(Player player) {
+        World world = Bukkit.getWorld("world");
+        
+        if (world == null) {
+            player.sendMessage("§cBoat racing world not found! Please contact an administrator.");
+            return;
+        }
+        
+        Location boatLocation = new Location(world, 603.5, 102, -46.5, 180, 0);
+        player.teleport(boatLocation);
+        
+        player.sendMessage("§a§lWelcome to Ice Boat Racing!");
+        player.sendMessage("§7Spawning your boat...");
+        
+        // Delay the boat spawn slightly to ensure player is properly teleported
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                try {
+                    // Create boat location slightly in the water
+                    Location spawnLoc = new Location(world, 603.5, 101, -46.5, 180, 0);
+                    Boat boat = (Boat) world.spawnEntity(spawnLoc, EntityType.OAK_BOAT);
+                    
+                    // Add player to boat with slight delay
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            if (boat != null && !boat.isDead() && player.isOnline()) {
+                                boat.addPassenger(player);
+                                playersInBoats.put(player.getUniqueId(), boat);
+                                player.sendMessage("§7Use your compass to return to lobby when done!");
+                            }
+                        }
+                    }.runTaskLater(HopeBlockPlugin.this, 5L);
+                    
+                } catch (Exception e) {
+                    getLogger().warning("Failed to spawn boat for " + player.getName() + ": " + e.getMessage());
+                    player.sendMessage("§cFailed to spawn boat! Please try again.");
+                }
+            }
+        }.runTaskLater(this, 3L);
+    }
+    
+    @EventHandler
+    public void onVehicleExit(VehicleExitEvent event) {
+        if (event.getVehicle() instanceof Boat && event.getExited() instanceof Player) {
+            Player player = (Player) event.getExited();
+            Boat boat = (Boat) event.getVehicle();
+            
+            // Prevent players from leaving their boat in ice boat racing
+            if (playersInBoats.containsKey(player.getUniqueId()) && 
+                playersInBoats.get(player.getUniqueId()).equals(boat)) {
+                event.setCancelled(true);
+                player.sendMessage("§c§lYou cannot leave your boat during Ice Boat Racing!");
+                player.sendMessage("§7Use your compass to return to lobby!");
+            }
+        }
     }
     
     private void fillEmptySlots(Inventory inv) {
